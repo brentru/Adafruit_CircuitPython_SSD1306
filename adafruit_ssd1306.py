@@ -63,7 +63,7 @@ class _SSD1306:
     """Base class for SSD1306 display driver"""
     #pylint: disable-msg=too-many-arguments
     #pylint: disable-msg=too-many-instance-attributes
-    def __init__(self, framebuffer, width, height, external_vcc, reset):
+    def __init__(self, buffer, width, height, external_vcc, reset, is_linux):
         self.framebuf = framebuffer
         self.fill = self.framebuf.fill
         self.pixel = self.framebuf.pixel
@@ -176,7 +176,7 @@ class SSD1306_I2C(_SSD1306):
     :param reset: if needed, DigitalInOut designating reset pin
     """
 
-    def __init__(self, width, height, i2c, *, addr=0x3c, external_vcc=False, reset=None):
+    def __init__(self, width, height, i2c, *, addr=0x3c, external_vcc=False, reset=None, is_linux=False):
         self.i2c_device = i2c_device.I2CDevice(i2c, addr)
         self.addr = addr
         self.temp = bytearray(2)
@@ -185,10 +185,14 @@ class SSD1306_I2C(_SSD1306):
         # buffer is used to mask this byte from the framebuffer operations
         # (without a major memory hit as memoryview doesn't copy to a separate
         # buffer).
-        self.buffer = bytearray(((height // 8) * width) + 1)
-        self.buffer[0] = 0x40  # Set first byte of data buffer to Co=0, D/C=1
-        framebuffer = framebuf.FrameBuffer1(memoryview(self.buffer)[1:], width, height)
-        super().__init__(framebuffer, width, height, external_vcc, reset)
+        if is linux: # CPython
+          self.buffer = bytearray(((height // 8) * width))
+          framebuffer = buffer
+        else: # CircuitPython
+          self.buffer = bytearray(((height // 8) * width) + 1)
+          self.buffer[0] = 0x40  # Set first byte of data buffer to Co=0, D/C=1
+          framebuffer = framebuf.FrameBuffer1(memoryview(self.buffer)[1:], width, height)
+        super().__init__(framebuffer, width, height, external_vcc, reset, is_linux)
 
     def write_cmd(self, cmd):
         """Send a command to the SPI device"""

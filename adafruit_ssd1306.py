@@ -32,7 +32,6 @@ import time
 
 from micropython import const
 from adafruit_bus_device import i2c_device, spi_device
-import framebuf
 
 __version__ = "0.0.0-auto.0"
 __repo__ = "https://github.com/adafruit/Adafruit_CircuitPython_SSD1306.git"
@@ -64,16 +63,27 @@ class _SSD1306:
     #pylint: disable-msg=too-many-arguments
     #pylint: disable-msg=too-many-instance-attributes
     def __init__(self, buffer, width, height, external_vcc, reset, is_linux):
-        self.framebuf = framebuffer
-        self.fill = self.framebuf.fill
-        self.pixel = self.framebuf.pixel
-        self.line = self.framebuf.line
-        self.text = self.framebuf.text
-        self.scroll = self.framebuf.scroll
-        self.blit = self.framebuf.blit
-        self.vline = self.framebuf.vline
-        self.hline = self.framebuf.hline
-        self.fill_rect = self.framebuf.fill_rect
+        # Contain an initial check for linux
+        # CPython
+        if is_linux:
+          self._is_linux = is_linux
+          self.buffer = buffer
+          from PIL import Image
+          from PIL import ImageDraw
+          from PIL import ImageFont
+        # CircuitPython
+        else:
+          import framebuf
+          self.framebuf = buffer
+          self.fill = self.framebuf.fill
+          self.pixel = self.framebuf.pixel
+          self.line = self.framebuf.line
+          self.text = self.framebuf.text
+          self.scroll = self.framebuf.scroll
+          self.blit = self.framebuf.blit
+          self.vline = self.framebuf.vline
+          self.hline = self.framebuf.hline
+          self.fill_rect = self.framebuf.fill_rect
         self.width = width
         self.height = height
         self.external_vcc = external_vcc
@@ -82,11 +92,19 @@ class _SSD1306:
         if self.reset_pin:
             self.reset_pin.switch_to_output(value=0)
         self.pages = self.height // 8
-        # Note the subclass must initialize self.framebuf to a framebuffer.
-        # This is necessary because the underlying data buffer is different
-        # between I2C and SPI implementations (I2C needs an extra byte).
         self.poweron()
         self.init_display()
+
+    def cPythonFill(self):
+      """Emulation of framebuf's fill command
+      using Pillow
+      """
+      from PIL import Image
+      from PIL import ImageDraw
+      image = Image.new('1', (self.width, self.height))
+      draw = ImageDraw.Draw(image)
+      draw.rectangle((0,0,self.width,self.height), outline=0, fill=0)
+
 
     def init_display(self):
         """Base class to initialize display"""
@@ -113,8 +131,12 @@ class _SSD1306:
                 SET_CHARGE_PUMP, 0x10 if self.external_vcc else 0x14,
                 SET_DISP | 0x01): # on
             self.write_cmd(cmd)
-        self.fill(0)
+        if self._is_linux:
+          self.cPythonFill()
+        else:
+          self.fill(0)
         self.show()
+
 
     def poweroff(self):
         """Turn off the display (nothing visible)"""
@@ -150,6 +172,9 @@ class _SSD1306:
 
     def show(self):
         """Update the display"""
+        # CPython
+        if self._is_linux:
+          self._buffer = [0]*(self.width*self.pages) # clear the _buffer
         xpos0 = 0
         xpos1 = self.width - 1
         if self.width == 64:
@@ -162,7 +187,9 @@ class _SSD1306:
         self.write_cmd(SET_PAGE_ADDR)
         self.write_cmd(0)
         self.write_cmd(self.pages - 1)
+        # Write to the framebuffer
         self.write_framebuf()
+
 
 class SSD1306_I2C(_SSD1306):
     """
@@ -180,19 +207,13 @@ class SSD1306_I2C(_SSD1306):
         self.i2c_device = i2c_device.I2CDevice(i2c, addr)
         self.addr = addr
         self.temp = bytearray(2)
-        # Add an extra byte to the data buffer to hold an I2C data/command byte
-        # to use hardware-compatible I2C transactions.  A memoryview of the
-        # buffer is used to mask this byte from the framebuffer operations
-        # (without a major memory hit as memoryview doesn't copy to a separate
-        # buffer).
-        if is linux: # CPython
+        if is_linux: # CPython
           self.buffer = bytearray(((height // 8) * width))
-          framebuffer = buffer
         else: # CircuitPython
           self.buffer = bytearray(((height // 8) * width) + 1)
           self.buffer[0] = 0x40  # Set first byte of data buffer to Co=0, D/C=1
           framebuffer = framebuf.FrameBuffer1(memoryview(self.buffer)[1:], width, height)
-        super().__init__(framebuffer, width, height, external_vcc, reset, is_linux)
+        super().__init__(self.buffer, width, height, external_vcc, reset, is_linux)
 
     def write_cmd(self, cmd):
         """Send a command to the SPI device"""
@@ -206,6 +227,7 @@ class SSD1306_I2C(_SSD1306):
         hardware I2C interfaces."""
         with self.i2c_device:
             self.i2c_device.write(self.buffer)
+
 
 #pylint: disable-msg=too-many-arguments
 class SSD1306_SPI(_SSD1306):
